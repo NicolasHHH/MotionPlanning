@@ -11,10 +11,9 @@ from heapdict import heapdict
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-import scipy.spatial.kdtree as kd
+import scipy.spatial as ss
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)) +
-                "/../../MotionPlanning/")
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../../MotionPlanning/")
 
 import HybridAstarPlanner.astar as astar
 import HybridAstarPlanner.draw as draw
@@ -106,41 +105,42 @@ class QueuePrior:
 
 
 def hybrid_astar_planning(sx, sy, syaw, gx, gy, gyaw, ox, oy, xyreso, yawreso):
-    sxr, syr = round(sx / xyreso), round(sy / xyreso)
-    gxr, gyr = round(gx / xyreso), round(gy / xyreso)
-    syawr = round(rs.pi_2_pi(syaw) / yawreso)
-    gyawr = round(rs.pi_2_pi(gyaw) / yawreso)
+    sxr, syr = round(sx / xyreso), round(sy / xyreso)  # 5, 4
+    gxr, gyr = round(gx / xyreso), round(gy / xyreso)  # 22, 10
+    syawr = round(rs.pi_2_pi(syaw) / yawreso)  # 8
+    gyawr = round(rs.pi_2_pi(gyaw) / yawreso)  # 6
 
     nstart = Node(sxr, syr, syawr, 1, [sx], [sy], [syaw], [1], 0.0, 0.0, -1)
     ngoal = Node(gxr, gyr, gyawr, 1, [gx], [gy], [gyaw], [1], 0.0, 0.0, -1)
 
-    kdtree = kd.KDTree([[x, y] for x, y in zip(ox, oy)])
+    kdtree = ss.KDTree([[x, y] for x, y in zip(ox, oy)])
     P = calc_parameters(ox, oy, xyreso, yawreso, kdtree)
 
+    # 根据障碍物和终点位置，生成静态代价地图（holonomic 指所有自由度可控的，如万向轮；这里即不考虑运动学约束，保证代价admissible）。
     hmap = astar.calc_holonomic_heuristic_with_obstacle(ngoal, P.ox, P.oy, P.xyreso, 1.0)
-    steer_set, direc_set = calc_motion_set()
+    steer_set, direc_set = calc_motion_set()  # static, (angle, +/-1)
     open_set, closed_set = {calc_index(nstart, P): nstart}, {}
 
     qp = QueuePrior()
     qp.put(calc_index(nstart, P), calc_hybrid_cost(nstart, hmap, P))
 
     while True:
-        if not open_set:
+        if not open_set:  # 空
             return None
 
-        ind = qp.get()
+        ind = qp.get()  # pop 代价最小的
         n_curr = open_set[ind]
-        closed_set[ind] = n_curr
+        closed_set[ind] = n_curr  # 放入closed
         open_set.pop(ind)
 
-        update, fpath = update_node_with_analystic_expantion(n_curr, ngoal, P)
+        update, fpath = update_node_with_analystic_expantion(n_curr, ngoal, P)  # 搜索树的扩展（运动学约束）
 
         if update:
-            fnode = fpath
+            fnode = fpath  # 基于RS/Dubins 做直连Target操作。
             break
 
         for i in range(len(steer_set)):
-            node = calc_next_node(n_curr, ind, steer_set[i], direc_set[i], P)
+            node = calc_next_node(n_curr, ind, steer_set[i], direc_set[i], P)  # 根据steer找到下个节点所在格子
 
             if not node:
                 continue
@@ -154,7 +154,7 @@ def hybrid_astar_planning(sx, sy, syaw, gx, gy, gyaw, ox, oy, xyreso, yawreso):
                 open_set[node_ind] = node
                 qp.put(node_ind, calc_hybrid_cost(node, hmap, P))
             else:
-                if open_set[node_ind].cost > node.cost:
+                if open_set[node_ind].cost > node.cost:  # 用 cost 更小的路径替换
                     open_set[node_ind] = node
                     qp.put(node_ind, calc_hybrid_cost(node, hmap, P))
 
@@ -164,19 +164,19 @@ def hybrid_astar_planning(sx, sy, syaw, gx, gy, gyaw, ox, oy, xyreso, yawreso):
 def extract_path(closed, ngoal, nstart):
     rx, ry, ryaw, direc = [], [], [], []
     cost = 0.0
-    node = ngoal
+    node = ngoal # 从终点开始回溯
 
     while True:
         rx += node.x[::-1]
         ry += node.y[::-1]
         ryaw += node.yaw[::-1]
         direc += node.directions[::-1]
-        cost += node.cost
+        cost += node.cost  # 倒序添加当前节点的内容
 
-        if is_same_grid(node, nstart):
+        if is_same_grid(node, nstart):  # 检查是否回到了起点
             break
 
-        node = closed[node.pind]
+        node = closed[node.pind]  # parent index
 
     rx = rx[::-1]
     ry = ry[::-1]
@@ -195,7 +195,7 @@ def calc_next_node(n_curr, c_id, u, d, P):
     nlist = math.ceil(step / C.MOVE_STEP)
     xlist = [n_curr.x[-1] + d * C.MOVE_STEP * math.cos(n_curr.yaw[-1])]
     ylist = [n_curr.y[-1] + d * C.MOVE_STEP * math.sin(n_curr.yaw[-1])]
-    yawlist = [rs.pi_2_pi(n_curr.yaw[-1] + d * C.MOVE_STEP / C.WB * math.tan(u))]
+    yawlist = [rs.pi_2_pi(n_curr.yaw[-1] + d * C.MOVE_STEP / C.WB * math.tan(u))]  # ？
 
     for i in range(nlist - 1):
         xlist.append(xlist[i] + d * C.MOVE_STEP * math.cos(yawlist[i]))
@@ -221,14 +221,14 @@ def calc_next_node(n_curr, c_id, u, d, P):
     if direction != n_curr.direction:  # switch back penalty
         cost += C.GEAR_COST
 
-    cost += C.STEER_ANGLE_COST * abs(u)  # steer angle penalyty
+    cost += C.STEER_ANGLE_COST * abs(u)  # steer angle penalty
     cost += C.STEER_CHANGE_COST * abs(n_curr.steer - u)  # steer change penalty
     cost = n_curr.cost + cost
 
     directions = [direction for _ in range(len(xlist))]
 
     node = Node(xind, yind, yawind, direction, xlist, ylist,
-                yawlist, directions, u, cost, c_id)
+                yawlist, directions, u, cost, c_id)  # 所在格子xy，历史轨迹，朝向，代价，父节点
 
     return node
 
@@ -368,10 +368,10 @@ def calc_hybrid_cost(node, hmap, P):
 
 def calc_motion_set():
     s = np.arange(C.MAX_STEER / C.N_STEER,
-                  C.MAX_STEER, C.MAX_STEER / C.N_STEER)
+                  C.MAX_STEER, C.MAX_STEER / C.N_STEER)  # angle sampling
 
-    steer = list(s) + [0.0] + list(-s)
-    direc = [1.0 for _ in range(len(steer))] + [-1.0 for _ in range(len(steer))]
+    steer = list(s) + [0.0] + list(-s)  # both sides
+    direc = [1.0 for _ in range(len(steer))] + [-1.0 for _ in range(len(steer))]  # avant / recul
     steer = steer + steer
 
     return steer, direc
@@ -395,16 +395,16 @@ def calc_index(node, P):
 
 
 def calc_parameters(ox, oy, xyreso, yawreso, kdtree):
-    minx = round(min(ox) / xyreso)
-    miny = round(min(oy) / xyreso)
-    maxx = round(max(ox) / xyreso)
-    maxy = round(max(oy) / xyreso)
+    minx = round(min(ox) / xyreso)  # 0
+    miny = round(min(oy) / xyreso)  # 0
+    maxx = round(max(ox) / xyreso)  # 25
+    maxy = round(max(oy) / xyreso)  # 15
 
-    xw, yw = maxx - minx, maxy - miny
+    xw, yw = maxx - minx, maxy - miny  # 25 15
 
-    minyaw = round(-C.PI / yawreso) - 1
-    maxyaw = round(C.PI / yawreso)
-    yaww = maxyaw - minyaw
+    minyaw = round(-C.PI / yawreso) - 1  # -13
+    maxyaw = round(C.PI / yawreso)  # 12
+    yaww = maxyaw - minyaw  # 25
 
     return Para(minx, miny, minyaw, maxx, maxy, maxyaw,
                 xw, yw, yaww, xyreso, yawreso, ox, oy, kdtree)
@@ -491,10 +491,10 @@ def design_obstacles(x, y):
 def main():
     print("start!")
     x, y = 51, 31
-    sx, sy, syaw0 = 10.0, 7.0, np.deg2rad(120.0)
-    gx, gy, gyaw0 = 45.0, 20.0, np.deg2rad(90.0)
+    sx, sy, syaw0 = 10.0, 7.0, np.deg2rad(120.0)  # start
+    gx, gy, gyaw0 = 45.0, 20.0, np.deg2rad(90.0)  # target
 
-    ox, oy = design_obstacles(x, y)
+    ox, oy = design_obstacles(x, y)  # plt.scatter(ox, oy)
 
     t0 = time.time()
     path = hybrid_astar_planning(sx, sy, syaw0, gx, gy, gyaw0,
@@ -506,6 +506,7 @@ def main():
         print("Searching failed!")
         return
 
+    # visualization
     x = path.x
     y = path.y
     yaw = path.yaw
